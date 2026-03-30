@@ -21,7 +21,7 @@ import java.io.IOException;
 public class MainActivity extends AppCompatActivity implements NfcAdapter.ReaderCallback {
 
     // IP TWOJEGO SERWERA SKLEPU (PORT 8080)
-    private final String TERMINAL_API = "http://192.168.0.101:8080/api/terminal";
+    private final String TERMINAL_API = AppConfig.SERVER_URL;
 
     private OkHttpClient client;
     private NfcAdapter nfcAdapter;
