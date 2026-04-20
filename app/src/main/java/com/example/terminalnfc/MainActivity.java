@@ -1,26 +1,25 @@
 package com.example.terminalnfc;
 
+import android.app.AlertDialog;
+import android.media.AudioManager;
+import android.media.ToneGenerator;
 import android.nfc.NfcAdapter;
 import android.nfc.Tag;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
+import android.widget.EditText;
 import android.widget.TextView;
-import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 
 import org.json.JSONObject;
-import okhttp3.Call;
-import okhttp3.Callback;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
+
+import okhttp3.*;
 import java.io.IOException;
 
 public class MainActivity extends AppCompatActivity implements NfcAdapter.ReaderCallback {
 
-    // IP TWOJEGO SERWERA SKLEPU (PORT 8080)
     private final String TERMINAL_API = AppConfig.SERVER_URL;
 
     private OkHttpClient client;
@@ -30,8 +29,11 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
 
     private TextView tvTerminalStatus, tvAmount, tvInstruction, tvCardInfo;
 
-    // Zmienna, by terminal nie czytał kart, gdy kasa tego nie wymaga
     private boolean isWaitingForCard = false;
+    private double currentAmountDouble = 0.0;
+
+    // Generator profesjonalnych dźwięków systemowych
+    private ToneGenerator toneGenerator;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -41,26 +43,23 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
         client = new OkHttpClient();
         nfcAdapter = NfcAdapter.getDefaultAdapter(this);
 
+        // Inicjalizacja dźwięków na 100% głośności systemowej
+        toneGenerator = new ToneGenerator(AudioManager.STREAM_ALARM, 100);
+
         tvTerminalStatus = findViewById(R.id.tvTerminalStatus);
         tvAmount = findViewById(R.id.tvAmount);
         tvInstruction = findViewById(R.id.tvInstruction);
         tvCardInfo = findViewById(R.id.tvCardInfo);
 
-        if (nfcAdapter == null) {
-            Toast.makeText(this, "To urządzenie nie obsługuje NFC!", Toast.LENGTH_LONG).show();
-            tvInstruction.setText("Brak modułu NFC");
-        }
-
         startPollingStoreServer();
     }
 
-    // --- CYKLICZNE ODPYTYWANIE SERWERA SKLEPU ---
     private void startPollingStoreServer() {
         pollingRunnable = new Runnable() {
             @Override
             public void run() {
                 checkTerminalStatus();
-                pollingHandler.postDelayed(this, 1500); // Odpytuj co 1.5 sekundy
+                pollingHandler.postDelayed(this, 1000); // Odpytuj co 1 sek
             }
         };
         pollingHandler.post(pollingRunnable);
@@ -70,7 +69,8 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
         Request request = new Request.Builder().url(TERMINAL_API + "/status").build();
         client.newCall(request).enqueue(new Callback() {
             @Override
-            public void onFailure(Call call, IOException e) {}
+            public void onFailure(Call call, IOException e) {
+            }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
@@ -81,9 +81,12 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
 
                         String status = state.getString("status");
                         String amount = state.getString("amount");
+                        currentAmountDouble = Double.parseDouble(amount);
 
                         runOnUiThread(() -> updateUiBasedOnStatus(status, amount));
-                    } catch (Exception e) { e.printStackTrace(); }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
                 }
             }
         });
@@ -93,77 +96,121 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
         if ("WAITING_FOR_CARD".equals(status)) {
             isWaitingForCard = true;
             tvTerminalStatus.setText("ZBLIŻ KARTĘ");
-            tvTerminalStatus.setTextColor(android.graphics.Color.parseColor("#FFEB3B")); // Żółty
+            tvTerminalStatus.setTextColor(android.graphics.Color.parseColor("#FFEB3B"));
             tvAmount.setText(amount + " PLN");
-            tvInstruction.setText("Przyłącz kartę do tyłu telefonu...");
+            tvInstruction.setText("Oczekuję na zbliżenie karty...");
         } else if ("CARD_READ".equals(status)) {
             isWaitingForCard = false;
-            tvTerminalStatus.setText("PRZETWARZANIE");
-            tvTerminalStatus.setTextColor(android.graphics.Color.parseColor("#2196F3")); // Niebieski
-            tvInstruction.setText("Proszę czekać na odpowiedź z kasy...");
+            tvTerminalStatus.setText("PRZETWARZANIE...");
+            tvTerminalStatus.setTextColor(android.graphics.Color.parseColor("#2196F3"));
+            tvInstruction.setText("Proszę nie odkładać telefonu.");
+        } else if ("SUCCESS".equals(status)) {
+            // SUKCES! Gra krótki dźwięk
+            if (!tvTerminalStatus.getText().toString().equals("ZAAKCEPTOWANO")) {
+                toneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, 400); // PIK!
+            }
+            tvTerminalStatus.setText("ZAAKCEPTOWANO");
+            tvTerminalStatus.setTextColor(android.graphics.Color.parseColor("#4CAF50"));
+            tvInstruction.setText("Płatność zakończona pomyślnie.");
+        } else if (status.startsWith("REJECTED")) {
+            // BŁĄD! Gra potrójny ostrzegawczy dźwięk
+            if (!tvTerminalStatus.getText().toString().startsWith("ODRZUCONA")) {
+                toneGenerator.startTone(ToneGenerator.TONE_SUP_ERROR, 1000); // BEEP BEEP BEEP!
+            }
+            tvTerminalStatus.setText("ODRZUCONA");
+            tvTerminalStatus.setTextColor(android.graphics.Color.RED);
+
+            if (status.equals("REJECTED_PIN")) tvInstruction.setText("BŁĘDNY PIN!");
+            else if (status.equals("REJECTED_FUNDS")) tvInstruction.setText("BRAK ŚRODKÓW!");
+            else tvInstruction.setText("KARTA ZABLOKOWANA LUB BŁĄD!");
         } else {
             isWaitingForCard = false;
             tvTerminalStatus.setText("TERMINAL GOTOWY");
-            tvTerminalStatus.setTextColor(android.graphics.Color.parseColor("#4CAF50")); // Zielony
+            tvTerminalStatus.setTextColor(android.graphics.Color.parseColor("#4CAF50"));
             tvAmount.setText("0.00 PLN");
-            tvInstruction.setText("Oczekuję na żądanie z kasy...");
-            tvCardInfo.setText("ID Karty: ---");
+            tvInstruction.setText("Oczekuję na kasę...");
+            tvCardInfo.setText("---");
         }
     }
 
-    // --- OBSŁUGA NFC ---
+    // --- CZYTANIE KARTY (NFC) ---
+    @Override
+    public void onTagDiscovered(Tag tag) {
+        if (!isWaitingForCard) return;
+
+        // Odtwarzamy szybki "pik" na znak odczytania karty (jak w Biedronce)
+        toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 100);
+
+        byte[] idBytes = tag.getId();
+        String cardUid = bytesToHex(idBytes);
+        isWaitingForCard = false; // Blokujemy ponowne czytanie
+
+        runOnUiThread(() -> {
+            tvCardInfo.setText("Karta: " + cardUid);
+            // Jeśli kwota > 100 PLN, wymagamy PINu
+            if (currentAmountDouble > 100.00) {
+                showPinDialog(cardUid);
+            } else {
+                sendCardToStore(cardUid, null);
+            }
+        });
+    }
+
+    private void showPinDialog(String cardUid) {
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        input.setTextAlignment(android.view.View.TEXT_ALIGNMENT_CENTER);
+        input.setTextSize(32f);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Wymagany PIN")
+                .setMessage("Kwota powyżej 100 PLN. Wpisz PIN karty:")
+                .setView(input)
+                .setCancelable(false)
+                .setPositiveButton("ZATWIERDŹ", (dialog, which) -> {
+                    String pin = input.getText().toString();
+                    sendCardToStore(cardUid, pin);
+                })
+                .show();
+    }
+
+    private void sendCardToStore(String cardUid, String pin) {
+        String url = TERMINAL_API + "/cardRead?cardUid=" + cardUid;
+        if (pin != null && !pin.isEmpty()) url += "&pin=" + pin;
+
+        Request request = new Request.Builder().url(url).post(RequestBody.create(null, new byte[0])).build();
+        client.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) {
+            }
+        });
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
-        if (nfcAdapter != null) {
-            // Włącza nasłuchiwanie na KAŻDY rodzaj tagu NFC
-            int flags = NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_NFC_B | NfcAdapter.FLAG_READER_NFC_F | NfcAdapter.FLAG_READER_NFC_V;
-            nfcAdapter.enableReaderMode(this, this, flags, null);
-        }
+        if (nfcAdapter != null) nfcAdapter.enableReaderMode(this, this, 15, null);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        if (nfcAdapter != null) {
-            nfcAdapter.disableReaderMode(this);
-        }
+        if (nfcAdapter != null) nfcAdapter.disableReaderMode(this);
     }
 
-    // TA METODA ODPALA SIĘ, GDY ZBLIŻYSZ KARTĘ DO TELEFONU
     @Override
-    public void onTagDiscovered(Tag tag) {
-        if (!isWaitingForCard) return; // Ignorujemy kartę, jeśli kasa nie kazała płacić
-
-        // Odczytujemy ID sprzętowe (UID) karty
-        byte[] idBytes = tag.getId();
-        String cardUid = bytesToHex(idBytes);
-
-        runOnUiThread(() -> {
-            tvCardInfo.setText("Odczytano kartę: " + cardUid);
-            tvInstruction.setText("Wysyłanie do kasy...");
-        });
-
-        // Wysyłamy ID karty do serwera sklepu
-        sendCardToStore(cardUid);
+    protected void onDestroy() {
+        super.onDestroy();
+        pollingHandler.removeCallbacks(pollingRunnable);
+        if (toneGenerator != null) toneGenerator.release();
     }
 
-    private void sendCardToStore(String cardUid) {
-        String url = TERMINAL_API + "/cardRead?cardUid=" + cardUid;
-        Request request = new Request.Builder().url(url).post(RequestBody.create(new byte[0])).build();
-
-        client.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Call call, IOException e) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Błąd wysyłania na serwer", Toast.LENGTH_SHORT).show());
-            }
-            @Override
-            public void onResponse(Call call, Response response) {}
-        });
-    }
-
-    // Metoda pomocnicza: Konwersja bajtów na czytelny kod HEX (np. 04A1B2C3)
     private static final char[] HEX_ARRAY = "0123456789ABCDEF".toCharArray();
+
     public static String bytesToHex(byte[] bytes) {
         char[] hexChars = new char[bytes.length * 2];
         for (int j = 0; j < bytes.length; j++) {
