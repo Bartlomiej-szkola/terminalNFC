@@ -17,13 +17,6 @@ import org.json.JSONObject;
 
 import okhttp3.*;
 import java.io.IOException;
-import java.net.Inet4Address;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.util.Collections;
-import java.util.List;
-
-import fi.iki.elonen.NanoHTTPD;
 
 public class MainActivity extends AppCompatActivity implements NfcAdapter.ReaderCallback {
 
@@ -31,8 +24,8 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
 
     private OkHttpClient client;
     private NfcAdapter nfcAdapter;
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private WebhookServer webhookServer;
+    private Handler pollingHandler = new Handler(Looper.getMainLooper());
+    private Runnable pollingRunnable;
 
     private TextView tvTerminalStatus, tvAmount, tvInstruction, tvCardInfo;
 
@@ -58,140 +51,46 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
         tvInstruction = findViewById(R.id.tvInstruction);
         tvCardInfo = findViewById(R.id.tvCardInfo);
 
-        startWebhookServer();
+        startPollingStoreServer();
     }
 
-    // --- WEBHOOK: Mały serwer HTTP odbierający powiadomienia z backendu ---
-
-    private void startWebhookServer() {
-        webhookServer = new WebhookServer(AppConfig.WEBHOOK_PORT);
-        try {
-            webhookServer.start();
-            System.out.println("Webhook server uruchomiony na porcie " + AppConfig.WEBHOOK_PORT);
-
-            // Rejestrujemy się w backendzie
-            String localIp = AppConfig.IS_EMULATOR ? "127.0.0.1" : getLocalIpAddress();
-            if (localIp != null) {
-                String webhookUrl = "http://" + localIp + ":" + AppConfig.WEBHOOK_PORT + "/webhook";
-                registerWebhook(webhookUrl);
-
-                mainHandler.post(() -> {
-                    tvInstruction.setText("Zarejestrowano w kasie (" + localIp + ")");
-                });
-            } else {
-                mainHandler.post(() -> {
-                    tvTerminalStatus.setText("BRAK SIECI");
-                    tvTerminalStatus.setTextColor(android.graphics.Color.RED);
-                    tvInstruction.setText("Nie znaleziono adresu IP urządzenia!");
-                });
+    private void startPollingStoreServer() {
+        pollingRunnable = new Runnable() {
+            @Override
+            public void run() {
+                checkTerminalStatus();
+                pollingHandler.postDelayed(this, 1000); // Odpytuj co 1 sek
             }
-        } catch (IOException e) {
-            e.printStackTrace();
-            mainHandler.post(() -> {
-                tvTerminalStatus.setText("BŁĄD SERWERA");
-                tvTerminalStatus.setTextColor(android.graphics.Color.RED);
-                tvInstruction.setText("Nie udało się uruchomić serwera webhook.");
-            });
-        }
+        };
+        pollingHandler.post(pollingRunnable);
     }
 
-    private void registerWebhook(String webhookUrl) {
-        String url = TERMINAL_API + "/registerWebhook?url=" + webhookUrl;
-        Request request = new Request.Builder().url(url).post(RequestBody.create(null, new byte[0])).build();
+    private void checkTerminalStatus() {
+        Request request = new Request.Builder().url(TERMINAL_API + "/status").build();
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                mainHandler.post(() -> {
-                    tvTerminalStatus.setText("BRAK POŁĄCZENIA");
-                    tvTerminalStatus.setTextColor(android.graphics.Color.GRAY);
-                    tvInstruction.setText("Nie udało się zarejestrować w kasie.");
-                });
             }
 
             @Override
-            public void onResponse(Call call, Response response) {
-                mainHandler.post(() -> {
-                    tvInstruction.setText("Połączono z kasą.\nURL: " + webhookUrl);
-                });
-            }
-        });
-    }
+            public void onResponse(Call call, Response response) throws IOException {
+                if (response.isSuccessful() && response.body() != null) {
+                    try {
+                        String json = response.body().string();
+                        JSONObject state = new JSONObject(json);
 
-    private void unregisterWebhook() {
-        String localIp = AppConfig.IS_EMULATOR ? "127.0.0.1" : getLocalIpAddress();
-        if (localIp == null) return;
-        String webhookUrl = "http://" + localIp + ":" + AppConfig.WEBHOOK_PORT + "/webhook";
-        String url = TERMINAL_API + "/unregisterWebhook?url=" + webhookUrl;
-        Request request = new Request.Builder().url(url).post(RequestBody.create(null, new byte[0])).build();
-        // Fire and forget
-        client.newCall(request).enqueue(new Callback() {
-            @Override public void onFailure(Call call, IOException e) {}
-            @Override public void onResponse(Call call, Response response) {}
-        });
-    }
+                        String status = state.getString("status");
+                        String amount = state.getString("amount");
+                        currentAmountDouble = Double.parseDouble(amount);
 
-    // Serwer NanoHTTPD odbierający webhooki
-    private class WebhookServer extends NanoHTTPD {
-        public WebhookServer(int port) {
-            super(port);
-        }
-
-        @Override
-        public Response serve(IHTTPSession session) {
-            if (Method.POST.equals(session.getMethod()) && "/webhook".equals(session.getUri())) {
-                try {
-                    // NanoHTTPD wymaga sparsowania body
-                    java.util.Map<String, String> files = new java.util.HashMap<>();
-                    session.parseBody(files);
-                    String body = files.get("postData");
-
-                    if (body == null) return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing body");
-
-                    JSONObject state = new JSONObject(body);
-                    String status = state.getString("status");
-                    String amount = state.optString("amount", "0.00");
-                    currentAmountDouble = Double.parseDouble(amount);
-
-                    mainHandler.post(() -> updateUiBasedOnStatus(status, amount));
-
-                    return newFixedLengthResponse(Response.Status.OK, "text/plain", "OK");
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "ERROR");
-                }
-            }
-            return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not Found");
-        }
-    }
-
-    // Uzyskaj lokalny adres IP urządzenia (Wi-Fi)
-    private String getLocalIpAddress() {
-        try {
-            List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
-            // Najpierw szukamy wlan0 (Wi-Fi)
-            for (NetworkInterface intf : interfaces) {
-                if (!intf.getName().contains("wlan")) continue;
-                for (InetAddress addr : Collections.list(intf.getInetAddresses())) {
-                    if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
-                        return addr.getHostAddress();
+                        runOnUiThread(() -> updateUiBasedOnStatus(status, amount));
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
                 }
             }
-            // Fallback na inne interfejsy
-            for (NetworkInterface intf : interfaces) {
-                for (InetAddress addr : Collections.list(intf.getInetAddresses())) {
-                    if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
-                        return addr.getHostAddress();
-                    }
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return null;
+        });
     }
-
-    // --- UI ---
 
     private void updateUiBasedOnStatus(String status, String amount) {
         if ("WAITING_FOR_CARD".equals(status)) {
@@ -246,7 +145,7 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
         String cardUid = bytesToHex(idBytes);
         isWaitingForCard = false; // Blokujemy ponowne czytanie
 
-        mainHandler.post(() -> {
+        runOnUiThread(() -> {
             tvCardInfo.setText("Karta: " + cardUid);
             // Jeśli kwota > 100 PLN, wymagamy PINu
             if (currentAmountDouble > 100.00) {
@@ -306,8 +205,7 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        unregisterWebhook();
-        if (webhookServer != null) webhookServer.stop();
+        pollingHandler.removeCallbacks(pollingRunnable);
         if (toneGenerator != null) toneGenerator.release();
     }
 
