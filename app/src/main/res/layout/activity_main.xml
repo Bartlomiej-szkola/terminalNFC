@@ -1,49 +1,73 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:gravity="center"
-    android:background="#121212"
-    android:padding="20dp">
+    android:background="#121212">
 
-    <TextView
-        android:id="@+id/tvTerminalStatus"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="TERMINAL GOTOWY"
-        android:textColor="#4CAF50"
-        android:textSize="24sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="30dp"/>
+    <!-- Ikona ustawień (trzy kropki) w prawym górnym rogu -->
+    <ImageView
+        android:id="@+id/btnSettings"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentEnd="true"
+        android:layout_marginTop="16dp"
+        android:layout_marginEnd="16dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:clickable="true"
+        android:focusable="true"
+        android:padding="12dp"
+        android:src="@drawable/ic_more_vert"
+        app:tint="#888888" />
 
-    <TextView
-        android:id="@+id/tvAmount"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="0.00 PLN"
-        android:textColor="#FFFFFF"
-        android:textSize="48sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="40dp"/>
+    <!-- Twój oryginalny układ (wyśrodkowane teksty) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="20dp">
 
-    <TextView
-        android:id="@+id/tvInstruction"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Oczekuję na dane z kasy..."
-        android:textColor="#AAAAAA"
-        android:textSize="18sp"
-        android:layout_marginBottom="30dp"/>
+        <TextView
+            android:id="@+id/tvTerminalStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="30dp"
+            android:text="TERMINAL GOTOWY"
+            android:textColor="#4CAF50"
+            android:textSize="24sp"
+            android:textStyle="bold"/>
 
-    <!-- Testowe wyświetlanie odczytanej karty -->
-    <TextView
-        android:id="@+id/tvCardInfo"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="ID Karty: ---"
-        android:textColor="#2196F3"
-        android:textSize="16sp"
-        android:textStyle="italic"/>
+        <TextView
+            android:id="@+id/tvAmount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="40dp"
+            android:text="0.00 PLN"
+            android:textColor="#FFFFFF"
+            android:textSize="48sp"
+            android:textStyle="bold"/>
 
-</LinearLayout>
+        <TextView
+            android:id="@+id/tvInstruction"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="30dp"
+            android:text="Oczekuję na dane z kasy..."
+            android:textColor="#AAAAAA"
+            android:textSize="18sp"/>
+
+        <!-- Testowe wyświetlanie odczytanej karty -->
+        <TextView
+            android:id="@+id/tvCardInfo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="ID Karty: ---"
+            android:textColor="#2196F3"
+            android:textSize="16sp"
+            android:textStyle="italic"/>
+
+    </LinearLayout>
+
+</RelativeLayout>

@@ -1,6 +1,8 @@
 package com.example.terminalnfc;
 
 import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
 import android.nfc.NfcAdapter;
@@ -9,15 +11,23 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 import okhttp3.*;
+import android.widget.ImageView;
 
 public class MainActivity extends AppCompatActivity implements NfcAdapter.ReaderCallback {
+
+    private static final String PREFS_NAME = AppConfig.PREFS_NAME;
+    private static final String PREF_IP = AppConfig.PREF_IP;
+    private static final String PREF_PORT = AppConfig.PREF_PORT;
 
     private OkHttpClient client;
     private WebSocket webSocket;
@@ -28,6 +38,12 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
 
     private boolean isWaitingForCard = false;
     private String savedCardUid = null;
+
+    // Handler do kontrolowania prób ponownego połączenia
+    private Handler reconnectHandler = new Handler(Looper.getMainLooper());
+    private Runnable reconnectRunnable = this::connectWebSocket;
+
+    private String currentWsUrl = ""; // Aby wiedzieć, czy ustawienia się zmieniły
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,14 +59,20 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
         tvInstruction = findViewById(R.id.tvInstruction);
         tvCardInfo = findViewById(R.id.tvCardInfo);
 
+        ImageView btnSettings = findViewById(R.id.btnSettings);
+        btnSettings.setOnClickListener(v -> {
+            Intent intent = new Intent(MainActivity.this, SettingsActivity.class);
+            startActivity(intent);
+        });
+
         connectWebSocket();
     }
 
     private void connectWebSocket() {
         // Konwersja http na ws
-        String wsUrl = AppConfig.SERVER_URL.replace("http://", "ws://").replace("/api/terminal", "/ws/terminal");
+        currentWsUrl = AppConfig.getWsUrl(this);
 
-        Request request = new Request.Builder().url(wsUrl).build();
+        Request request = new Request.Builder().url(currentWsUrl).build();
         webSocket = client.newWebSocket(request, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
@@ -108,7 +130,8 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
             public void onFailure(WebSocket webSocket, Throwable t, Response response) {
                 runOnUiThread(() -> {
                     tvInstruction.setText("Błąd połączenia. Próbuję ponownie...");
-                    new Handler(Looper.getMainLooper()).postDelayed(() -> connectWebSocket(), 3000);
+                    // Używamy handlera, aby w razie zmiany ustawień móc anulować ponawianie połączenia
+                    reconnectHandler.postDelayed(reconnectRunnable, 3000);
                 });
             }
         });
@@ -156,7 +179,6 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
             tvCardInfo.setText("Karta: " + savedCardUid);
         });
 
-        // Wysyłamy UID do Kasy WPF przez WebSocket!
         sendWebSocketMessage("{\"action\":\"CARD_READ\", \"cardUid\":\"" + savedCardUid + "\"}");
     }
 
@@ -187,15 +209,29 @@ public class MainActivity extends AppCompatActivity implements NfcAdapter.Reader
     protected void onResume() {
         super.onResume();
         if (nfcAdapter != null) nfcAdapter.enableReaderMode(this, this, 15, null);
+
+        // Sprawdź, czy podczas pobytu w Ustawieniach URL się zmienił
+        String newUrl = AppConfig.getWsUrl(this);
+        if (!currentWsUrl.isEmpty() && !currentWsUrl.equals(newUrl)) {
+            // Skoro zmienił się IP/PORT, ubijamy stare połączenie i uruchamiamy nowe
+            reconnectHandler.removeCallbacks(reconnectRunnable);
+            if (webSocket != null) webSocket.cancel();
+
+            tvInstruction.setText("Łączenie z nowym adresem...");
+            connectWebSocket();
+        }
     }
+
     @Override
     protected void onPause() {
         super.onPause();
         if (nfcAdapter != null) nfcAdapter.disableReaderMode(this);
     }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        reconnectHandler.removeCallbacks(reconnectRunnable); // czyścimy handlera
         if (webSocket != null) webSocket.cancel();
         if (toneGenerator != null) toneGenerator.release();
     }
